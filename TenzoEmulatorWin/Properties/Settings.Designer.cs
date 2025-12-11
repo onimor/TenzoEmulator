@@ -49,7 +49,7 @@ namespace TenzoEmulatorWin.Properties {
         
         [global::System.Configuration.UserScopedSettingAttribute()]
         [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
-        [global::System.Configuration.DefaultSettingValueAttribute("0")]
+        [global::System.Configuration.DefaultSettingValueAttribute("1")]
         public decimal Address {
             get {
                 return ((decimal)(this["Address"]));

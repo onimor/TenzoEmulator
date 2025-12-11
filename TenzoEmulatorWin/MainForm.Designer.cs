@@ -55,11 +55,11 @@
             // cmbPort
             // 
             cmbPort.FormattingEnabled = true;
-            cmbPort.Items.AddRange(new object[] { "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "COM10", "COM11", "COM12", "COM13", "COM14" });
             cmbPort.Location = new Point(12, 30);
             cmbPort.Name = "cmbPort";
             cmbPort.Size = new Size(151, 28);
             cmbPort.TabIndex = 0;
+            cmbPort.DropDown += combOpen;
             // 
             // cmbBaud
             // 
@@ -73,6 +73,7 @@
             // numAddr
             // 
             numAddr.Location = new Point(12, 177);
+            numAddr.Minimum = new decimal(new int[] { 1, 0, 0, 0 });
             numAddr.Name = "numAddr";
             numAddr.Size = new Size(150, 27);
             numAddr.TabIndex = 2;
@@ -250,7 +251,9 @@
             Controls.Add(cmbBaud);
             Controls.Add(cmbPort);
             Name = "MainForm";
-            Text = "Form1";
+            Text = "Tenzo Emulator";
+            FormClosing += MainForm_FormClosing;
+            Load += MainForm_Load;
             ((System.ComponentModel.ISupportInitialize)numAddr).EndInit();
             ((System.ComponentModel.ISupportInitialize)numSerial).EndInit();
             ((System.ComponentModel.ISupportInitialize)numDecimals).EndInit();

@@ -27,7 +27,34 @@ namespace TenzoEmulatorWin
             InitializeTray();
             LoadSettings();
         }
+        protected override void WndProc(ref Message m)
+        {
+            const int WM_SHOWME = 0x8001;
 
+            if (m.Msg == WM_SHOWME)
+            {
+                ShowMe();
+            }
+
+            base.WndProc(ref m);
+        }
+         
+        private void ShowMe()
+        {
+            this.ShowInTaskbar = true;
+
+            // показать окно
+            if (!this.Visible)
+                this.Show();
+
+            // восстановить
+            if (this.WindowState == FormWindowState.Minimized)
+                this.WindowState = FormWindowState.Normal;
+
+            // поднять вверх
+            this.Activate();
+            this.BringToFront();
+        }
         private void InitializeTray()
         {
             trayIcon = new NotifyIcon()
@@ -38,7 +65,7 @@ namespace TenzoEmulatorWin
             };
             trayIcon.DoubleClick += (s, e) => { this.Show(); this.WindowState = FormWindowState.Normal; };
             trayIcon.ContextMenuStrip = new ContextMenuStrip();
-            //trayIcon.ContextMenuStrip.Items.Add("Открыть", null, (s, e) => trayIcon_DoubleClick(s, e));
+            trayIcon.ContextMenuStrip.Items.Add("Открыть", null, (s, e) => { this.Show(); this.WindowState = FormWindowState.Normal; });
             trayIcon.ContextMenuStrip.Items.Add("Выход", null, (s, e) => Application.Exit());
         }
 
@@ -59,7 +86,7 @@ namespace TenzoEmulatorWin
         }
 
 
-       
+
 
         private void SerialWorker()
         {
@@ -243,7 +270,7 @@ namespace TenzoEmulatorWin
         // Сохранение/загрузка настроек
         private void SaveSettings()
         {
-            Properties.Settings.Default.Port = cmbPort.Text;
+            Properties.Settings.Default.Port = cmbPort.SelectedText;
             Properties.Settings.Default.Baud = cmbBaud.Text;
             Properties.Settings.Default.Address = myAddr;
             Properties.Settings.Default.Serial = mySerial;
@@ -252,7 +279,7 @@ namespace TenzoEmulatorWin
 
         private void LoadSettings()
         {
-            cmbPort.Text = Properties.Settings.Default.Port;
+            cmbPort.SelectedText = Properties.Settings.Default.Port;
             cmbBaud.Text = Properties.Settings.Default.Baud;
             numAddr.Value = Properties.Settings.Default.Address;
             numSerial.Value = Properties.Settings.Default.Serial;
@@ -307,6 +334,12 @@ namespace TenzoEmulatorWin
             btnStart.Enabled = true;
             btnStop.Enabled = false;
             log("Эмулятор остановлен");
+        }
+
+        private void combOpen(object sender, EventArgs e)
+        {
+            cmbPort.Items.Clear();
+            cmbPort.Items.AddRange(SerialPort.GetPortNames());
         }
     }
 
