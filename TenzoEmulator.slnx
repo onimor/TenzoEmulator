@@ -1,3 +1,4 @@
 <Solution>
   <Project Path="TenzoEmulator/TenzoEmulator.csproj" />
+  <Project Path="TenzoEmulatorWin/TenzoEmulatorWin.csproj" Id="423a706d-6c8d-4a14-b2af-d20b2a0743fc" />
 </Solution>
