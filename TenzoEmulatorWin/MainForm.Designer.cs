@@ -76,6 +76,7 @@
             numAddr.Name = "numAddr";
             numAddr.Size = new Size(150, 27);
             numAddr.TabIndex = 2;
+            numAddr.Value = new decimal(new int[] { 1, 0, 0, 0 });
             numAddr.ValueChanged += myAddr_ValueChanged;
             // 
             // numSerial
