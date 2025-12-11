@@ -1,337 +1,210 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.IO.Ports;
 using System.Threading;
 
 class WeightTerminalEmulator
 {
     private static byte myAddr = 0x01;
-    private static uint mySerial = 0x000001; // SN2=0, SN1=0, SN0=1
-    private static double currentWeight = 123.4; // Simulated weight in kg
-    private static int decimalPlaces = 1; // Number of decimal places
+    private static uint mySerial = 0x000001;
+    private static double currentWeight = 123.45;
+    private static int decimalPlaces = 2;
     private static bool isStable = true;
     private static bool isOverload = false;
     private static bool isNegative = false;
 
-    private static SerialPort serialPort;
+    private static string portName = "COM2";
+    private static int baudRate = 9600;
 
-    public static void Main(string[] args)
+    static void Main(string[] args)
     {
-        Console.Write("Enter serial port name (e.g., COM1): ");
-        string portName = Console.ReadLine();
+        Console.WriteLine("Тензо-М эмулятор терминала");
+        Console.WriteLine("Команды: weight 123.45 | stable true/false | over true/false | neg true/false | dec 0-3 | quit");
 
-        Console.Write("Enter baud rate (e.g., 9600): ");
-        int baudRate = int.Parse(Console.ReadLine());
-
-        serialPort = new SerialPort(portName, baudRate, Parity.None, 8, StopBits.One);
-        serialPort.Open();
-
-        Console.WriteLine("Emulator running. Commands:");
-        Console.WriteLine("- 'weight <value>' to set simulated weight (e.g., weight 456.7)");
-        Console.WriteLine("- 'stable <true/false>' to set stability");
-        Console.WriteLine("- 'overload <true/false>' to set overload");
-        Console.WriteLine("- 'negative <true/false>' to set sign");
-        Console.WriteLine("- 'decimals <number>' to set decimal places (0-3)");
-        Console.WriteLine("- 'quit' to exit");
-
-        Thread serialThread = new Thread(SerialListener);
-        serialThread.Start();
-
-        while (true)
+        if (args.Length >= 2)
         {
-            string input = Console.ReadLine().Trim();
-            if (input == "quit") break;
-
-            if (input.StartsWith("weight "))
-            {
-                double.TryParse(input.Substring(7), out currentWeight);
-            }
-            else if (input.StartsWith("stable "))
-            {
-                bool.TryParse(input.Substring(7), out isStable);
-            }
-            else if (input.StartsWith("overload "))
-            {
-                bool.TryParse(input.Substring(9), out isOverload);
-            }
-            else if (input.StartsWith("negative "))
-            {
-                bool.TryParse(input.Substring(9), out isNegative);
-            }
-            else if (input.StartsWith("decimals "))
-            {
-                int.TryParse(input.Substring(9), out decimalPlaces);
-                if (decimalPlaces < 0 || decimalPlaces > 3) decimalPlaces = 1;
-            }
+            portName = args[0];
+            baudRate = int.Parse(args[1]);
+        }
+        else
+        {
+            Console.Write("COM-порт (например COM2): ");
+            portName = Console.ReadLine();
+            Console.Write("Скорость (обычно 9600): ");
+            baudRate = int.Parse(Console.ReadLine());
         }
 
-        serialPort.Close();
+        Thread worker = new Thread(SerialWorker) { IsBackground = true };
+        worker.Start();
+
+        while (true)
+        {
+            string cmd = Console.ReadLine()?.Trim().ToLower();
+            if (cmd == "quit" || cmd == "q") break;
+
+            if (cmd.StartsWith("weight ")) double.TryParse(cmd.Substring(7), out currentWeight);
+            else if (cmd.StartsWith("stable ")) bool.TryParse(cmd.Substring(7), out isStable);
+            else if (cmd.StartsWith("over ")) bool.TryParse(cmd.Substring(5), out isOverload);
+            else if (cmd.StartsWith("neg ")) bool.TryParse(cmd.Substring(4), out isNegative);
+            else if (cmd.StartsWith("dec ")) int.TryParse(cmd.Substring(4), out decimalPlaces);
+        }
     }
 
-    private static void SerialListener()
+    static void SerialWorker()
     {
         while (true)
         {
+            SerialPort port = null;
             try
             {
-                List<byte> payload = ReadFrame();
-                if (payload == null || payload.Count < 2) continue;
-
-                // Parse address
-                int pos = 0;
-                byte addr1 = payload[pos++];
-                bool isExtended = (addr1 == 0);
-                uint receivedSerial = 0;
-                byte addr = 0;
-                if (isExtended)
+                port = new SerialPort(portName, baudRate, Parity.None, 8, StopBits.One)
                 {
-                    if (payload.Count < pos + 3) continue;
-                    byte sn2 = payload[pos++];
-                    byte sn1 = payload[pos++];
-                    byte sn0 = payload[pos++];
-                    receivedSerial = ((uint)sn2 << 16) | ((uint)sn1 << 8) | sn0;
-                }
-                else
-                {
-                    addr = addr1;
-                }
+                    ReadTimeout = 500,
+                    WriteTimeout = 500,
+                    Handshake = Handshake.None,
+                    RtsEnable = true,
+                    DtrEnable = true
+                };
 
-                byte cop = payload[pos++];
-                List<byte> data = new List<byte>(payload.GetRange(pos, payload.Count - pos - 1));
-                byte receivedCrc = payload[payload.Count - 1];
+                port.Open();
+                Console.WriteLine($"[OK] {portName} открыт");
 
-                // Verify CRC over entire payload
-                byte check = 0;
-                foreach (byte b in payload)
+                while (port.IsOpen)
                 {
-                    check = UpdateCRC(b, check);
-                }
-                if (check != 0) continue;
+                    var frame = ReadFrame(port);
+                    if (frame == null) continue;
 
-                // Check address match
-                if (isExtended)
-                {
-                    if (receivedSerial != mySerial) continue;
-                }
-                else
-                {
-                    if (addr != myAddr) continue;
-                }
-
-                // Process command and get response data
-                List<byte> responseData = ProcessCommand(cop, data);
-
-                if (responseData != null)
-                {
-                    SendResponse(isExtended ? receivedSerial : addr, isExtended, cop, responseData);
+                    var response = ProcessFrame(frame);
+                    if (response != null)
+                        SendFrame(port, response);
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error in serial listener: {ex.Message}");
+                Console.WriteLine($"[ERR] {ex.Message}");
             }
+            finally
+            {
+                try { port?.Close(); port?.Dispose(); } catch { }
+            }
+
+            Console.WriteLine("Переподключение через 1 секунду...");
+            Thread.Sleep(1000);
         }
     }
 
-    private static List<byte> ProcessCommand(byte cop, List<byte> data)
+    static byte[] ProcessFrame(byte[] payload)
     {
-        List<byte> resp = new List<byte>();
+        if (payload.Length < 3) return null;
+
+        int pos = 0;
+        bool extended = payload[pos] == 0x00;
+        if (extended) pos += 4; // пропускаем 00 + 3 байта серийника
+        else pos += 1;
+
+        byte cop = payload[pos++];
+        bool addrOk = extended ? true : payload[0] == myAddr; // упрощённо, можно проверять серийник
+        if (!addrOk) return null;
 
         switch (cop)
         {
-            case 0xA0: // Assign network address
-                if (data.Count != 1) return null;
-                byte newAddr = data[0];
-                if (newAddr >= 0x01 && newAddr <= 0x9F)
-                {
-                    myAddr = newAddr;
-                    return resp; // Empty response data
-                }
-                return null;
+            case 0xA0: // назначение адреса
+                if (payload.Length >= pos + 1 && payload[pos] >= 1 && payload[pos] <= 0x9F)
+                    myAddr = payload[pos];
+                return new byte[] { payload[0], cop }; // пустой ответ
 
-            case 0xA1: // Get serial number
-                resp.Add((byte)((mySerial >> 16) & 0xFF));
-                resp.Add((byte)((mySerial >> 8) & 0xFF));
-                resp.Add((byte)(mySerial & 0xFF));
-                return resp;
+            case 0xA1: // запрос серийного номера
+                return new byte[] { 0x00, cop, (byte)(mySerial >> 16), (byte)(mySerial >> 8), (byte)mySerial };
 
-            case 0xC0: // Zero weight
+            case 0xC0: // тарирование
                 currentWeight = 0;
-                return resp;
+                return new byte[] { payload[0], cop };
 
-            case 0xC2: // Get net weight (simulated as current weight)
-                return GetWeightResponseData();
-
-            case 0xC3: // Get gross weight (simulated as current weight)
-                return GetWeightResponseData();
-
-            // Add more commands here as needed. For example:
-            // case 0xBF: // Get status
-            //     byte status = 0x00; // Simulate status byte
-            //     resp.Add(status);
-            //     return resp;
+            case 0xC2: // нетто
+            case 0xC3: // брутто
+                return BuildWeightResponse((byte)(extended ? 0 : myAddr), cop);
 
             default:
-                // Unknown command, no response
                 return null;
         }
     }
 
-    private static List<byte> GetWeightResponseData()
+    static byte[] BuildWeightResponse(byte addrByte, byte cop)
     {
-        List<byte> resp = new List<byte>();
+        long weightInt = (long)Math.Abs(currentWeight * Math.Pow(10, decimalPlaces));
+        string s = weightInt.ToString("D6");
+        byte w0 = (byte)((s[5] - '0') | ((s[4] - '0') << 4));
+        byte w1 = (byte)((s[3] - '0') | ((s[2] - '0') << 4));
+        byte w2 = (byte)((s[1] - '0') | ((s[0] - '0') << 4));
 
-        // Convert weight to 6-digit BCD (integer part scaled by decimals)
-        double absWeight = Math.Abs(currentWeight);
-        long intWeight = (long)(absWeight * Math.Pow(10, decimalPlaces));
-        string strWeight = intWeight.ToString("D6"); // Pad to 6 digits
+        byte con = (byte)(
+            (isNegative ? 0x80 : 0) |
+            (isStable ? 0x10 : 0) |
+            (isOverload ? 0x08 : 0) |
+            (decimalPlaces & 0x03));
 
-        byte w0 = (byte)(((strWeight[5] - '0') & 0x0F) | (((strWeight[4] - '0') & 0x0F) << 4));
-        byte w1 = (byte)(((strWeight[3] - '0') & 0x0F) | (((strWeight[2] - '0') & 0x0F) << 4));
-        byte w2 = (byte)(((strWeight[1] - '0') & 0x0F) | (((strWeight[0] - '0') & 0x0F) << 4));
-
-        resp.Add(w0);
-        resp.Add(w1);
-        resp.Add(w2);
-
-        byte con = (byte)((isNegative ? 0x80 : 0) |
-                          (isStable ? 0x10 : 0) |
-                          (isOverload ? 0x08 : 0) |
-                          (decimalPlaces & 0x03));
-        resp.Add(con);
-
-        return resp;
+        return new byte[] { addrByte, cop, w0, w1, w2, con };
     }
 
-    private static void SendResponse(uint addrValue, bool isExtended, byte cop, List<byte> respData)
+    static void SendFrame(SerialPort port, byte[] payload)
     {
-        List<byte> payload = new List<byte>();
+        port.Write(new byte[] { 0xFF }, 0, 1);
 
-        if (isExtended)
-        {
-            payload.Add(0x00);
-            payload.Add((byte)((addrValue >> 16) & 0xFF));
-            payload.Add((byte)((addrValue >> 8) & 0xFF));
-            payload.Add((byte)(addrValue & 0xFF));
-        }
-        else
-        {
-            payload.Add((byte)addrValue);
-        }
-
-        payload.Add(cop);
-        payload.AddRange(respData);
-        payload.Add(0x00); // CRC placeholder
-
-        // Compute CRC
         byte crc = 0;
-        for (int i = 0; i < payload.Count; i++)
-        {
-            crc = UpdateCRC(payload[i], crc);
-        }
-        payload[payload.Count - 1] = crc;
-
-        // Send frame
-        serialPort.Write(new byte[] { 0xFF }, 0, 1); // Start delimiter
-
         foreach (byte b in payload)
         {
-            serialPort.Write(new byte[] { b }, 0, 1);
-            if (b == 0xFF)
-            {
-                serialPort.Write(new byte[] { 0xFE }, 0, 1);
-            }
+            crc = CalcCrc(b, crc);
+            port.Write(new byte[] { b }, 0, 1);
+            if (b == 0xFF) port.Write(new byte[] { 0xFE }, 0, 1);
         }
 
-        serialPort.Write(new byte[] { 0xFF, 0xFF }, 0, 2); // End delimiter
+        port.Write(new byte[] { crc }, 0, 1);
+        if (crc == 0xFF) port.Write(new byte[] { 0xFE }, 0, 1);
+
+        port.Write(new byte[] { 0xFF, 0xFF }, 0, 2);
     }
 
-    private static byte UpdateCRC(byte input, byte crc)
+    static byte[] ReadFrame(SerialPort port)
     {
-        byte al = input;
-        byte ah = crc;
-
-        for (int i = 0; i < 8; i++)
+        try
         {
-            bool carry = (al & 0x80) != 0;
-            al = (byte)((al << 1) | (carry ? 1 : 0));
+            // ждём стартовый 0xFF
+            while (port.ReadByte() != 0xFF) { }
 
-            bool oldAh7 = (ah & 0x80) != 0;
-            ah = (byte)((ah << 1) | (carry ? 1 : 0));
+            var payload = new List<byte>();
+            byte crc = 0;
 
-            if (oldAh7)
+            while (true)
             {
-                ah ^= 0x69;
-            }
-        }
-
-        return ah;
-    }
-
-    private static List<byte> ReadFrame()
-    {
-        List<byte> payload = new List<byte>();
-
-        // Skip leading FF bytes
-        while (true)
-        {
-            int ib = serialPort.ReadByte();
-            if (ib == -1) return null;
-            byte b = (byte)ib;
-            if (b != 0xFF)
-            {
-                if (b != 0xFE) // Skip stray FE if any
+                int b = port.ReadByte();
+                if (b == 0xFF)
                 {
-                    payload.Add(b);
-                    break;
-                }
-            }
-        }
-
-        // Read until two consecutive FF, handling stuffing
-        while (true)
-        {
-            int ib = serialPort.ReadByte();
-            if (ib == -1) return null;
-            byte b = (byte)ib;
-
-            if (b == 0xFE)
-            {
-                continue; // Skip stuffed FE
-            }
-
-            if (b == 0xFF)
-            {
-                int nextIb = serialPort.ReadByte();
-                if (nextIb == -1) return null;
-                byte next = (byte)nextIb;
-
-                if (next == 0xFF)
-                {
-                    // End of frame
-                    break;
-                }
-                else if (next == 0xFE)
-                {
-                    // Stuffed FF, add FF to payload
-                    payload.Add(0xFF);
-                }
-                else
-                {
-                    // Unexpected, treat as data (add FF and next)
-                    payload.Add(0xFF);
-                    if (next != 0xFE)
+                    int next = port.ReadByte();
+                    if (next == 0xFF) // конец кадра
+                        return payload.Count >= 3 ? payload.ToArray() : null;
+                    if (next == 0xFE)
+                        b = 0xFF; // распакованный FF
+                    else
                     {
-                        payload.Add(next);
+                        payload.Add(0xFF);
+                        payload.Add((byte)next);
+                        continue;
                     }
                 }
-            }
-            else
-            {
-                payload.Add(b);
+                else if (b == 0xFE)
+                    continue; // пропускаем stuffing
+
+                payload.Add((byte)b);
+                crc = CalcCrc((byte)b, crc);
             }
         }
+        catch (TimeoutException) { return null; }
+        catch { return null; }
+    }
 
-        return payload.Count >= 2 ? payload : null;
+    static byte CalcCrc(byte b, byte crc)
+    {
+        byte x = (byte)(crc ^ b);
+        x = (byte)(x ^ (x << 4));
+        return (byte)(x ^ (x >> 3) ^ (x << 5));
     }
 }
